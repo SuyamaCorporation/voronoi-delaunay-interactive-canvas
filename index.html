@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ボロノイ図・ドロネー三角形 Canvas</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-4xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-center mb-2 text-indigo-300">🔷 ボロノイ図 / ドロネー三角形</h1>
+  <p class="text-center text-gray-400 mb-4 text-sm">クリックで点を追加 / ドラッグで移動 / 右クリックで削除</p>
+
+  <div class="flex gap-4">
+    <div class="flex-1">
+      <canvas id="mainCanvas" width="600" height="500"
+        class="rounded-xl border border-indigo-800 cursor-crosshair w-full"
+        style="max-width:600px; touch-action:none;"></canvas>
+    </div>
+
+    <div class="w-52 space-y-3">
+      <!-- Display Mode -->
+      <div class="bg-gray-800 rounded-xl p-3">
+        <label class="block text-xs font-bold text-indigo-300 mb-2">表示モード</label>
+        <div class="space-y-1">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="showVoronoi" checked aria-label="ボロノイ図を表示" class="accent-indigo-500">
+            ボロノイ図
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="showDelaunay" checked aria-label="ドロネー三角形を表示" class="accent-indigo-500">
+            ドロネー三角形
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="showPoints" checked aria-label="制御点を表示" class="accent-indigo-500">
+            制御点
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="showCircles" aria-label="外接円を表示" class="accent-indigo-500">
+            外接円
+          </label>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="bg-gray-800 rounded-xl p-3 space-y-2">
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-gray-300 flex-1" for="addCount">追加数:</label>
+          <input type="number" id="addCount" value="10" min="1" max="100" aria-label="ランダム追加数"
+            class="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-center">
+        </div>
+        <button id="addRandomBtn" aria-label="ランダムに点を追加" class="w-full bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-bold py-2 rounded-lg transition">
+          ランダム追加
+        </button>
+        <button id="clearBtn" aria-label="全ての点を削除" class="w-full bg-red-800 hover:bg-red-700 text-white text-sm font-bold py-2 rounded-lg transition">
+          クリア
+        </button>
+      </div>
+
+      <!-- Info -->
+      <div class="bg-gray-800 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-300 mb-2">情報</div>
+        <div class="text-xs text-gray-400 space-y-1">
+          <div>点数: <span id="infoPoints" class="text-white font-bold">0</span></div>
+          <div>三角形数: <span id="infoTri" class="text-white font-bold">0</span></div>
+          <div>ホバー最近接: <span id="infoNearest" class="text-yellow-300">-</span></div>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-3">
+        <div class="text-xs text-gray-400 space-y-1">
+          <div>• 左クリック: 点を追加</div>
+          <div>• ドラッグ: 点を移動</div>
+          <div>• 右クリック: 点を削除</div>
+          <div>• ホバー: 最近接点</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+let points = [];
+let triangles = []; // Delaunay triangles
+let dragIdx = -1;
+let hoverIdx = -1;
+
+function dist2(a, b) { return (a.x - b.x) ** 2 + (a.y - b.y) ** 2; }
+function dist(a, b) { return Math.sqrt(dist2(a, b)); }
+
+// Bowyer-Watson Delaunay triangulation
+function computeDelaunay() {
+  if (points.length < 3) { triangles = []; return; }
+
+  // Super triangle
+  const mx = W / 2, my = H / 2, mSize = Math.max(W, H) * 3;
+  const pts = [...points, { x: mx - mSize, y: my - mSize }, { x: mx + mSize, y: my - mSize }, { x: mx, y: my + mSize }];
+  const n = pts.length;
+  const si = n - 3, sj = n - 2, sk = n - 1;
+
+  let tris = [[si, sj, sk]];
+
+  for (let p = 0; p < points.length; p++) {
+    const pt = pts[p];
+    let badTris = [];
+    let polygon = [];
+
+    for (const tri of tris) {
+      const cc = circumcircle(pts[tri[0]], pts[tri[1]], pts[tri[2]]);
+      if (!cc) continue;
+      if (dist2(pt, cc.center) < cc.r2) {
+        badTris.push(tri);
+      }
+    }
+
+    // Find boundary polygon
+    for (const bad of badTris) {
+      const edges = [[bad[0], bad[1]], [bad[1], bad[2]], [bad[2], bad[0]]];
+      for (const edge of edges) {
+        let shared = false;
+        for (const other of badTris) {
+          if (other === bad) continue;
+          if (hasEdge(other, edge[0], edge[1])) { shared = true; break; }
+        }
+        if (!shared) polygon.push(edge);
+      }
+    }
+
+    tris = tris.filter(t => !badTris.includes(t));
+    for (const edge of polygon) {
+      tris.push([edge[0], edge[1], p]);
+    }
+  }
+
+  // Remove super triangle
+  triangles = tris.filter(t => t[0] < points.length && t[1] < points.length && t[2] < points.length)
+    .map(t => ({ a: t[0], b: t[1], c: t[2] }));
+}
+
+function hasEdge(tri, a, b) {
+  return (tri[0] === a && tri[1] === b) || (tri[1] === a && tri[2] === b) || (tri[2] === a && tri[0] === b) ||
+    (tri[0] === b && tri[1] === a) || (tri[1] === b && tri[2] === a) || (tri[2] === b && tri[0] === a);
+}
+
+function circumcircle(a, b, c) {
+  const ax = a.x, ay = a.y, bx = b.x, by = b.y, cx = c.x, cy = c.y;
+  const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(D) < 1e-8) return null;
+  const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / D;
+  const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / D;
+  const r2 = (ax - ux) ** 2 + (ay - uy) ** 2;
+  return { center: { x: ux, y: uy }, r2 };
+}
+
+// Compute Voronoi from Delaunay
+function computeVoronoiCells() {
+  // Voronoi vertex = circumcenter of each Delaunay triangle
+  const cells = {};
+  for (let i = 0; i < points.length; i++) cells[i] = [];
+
+  for (const tri of triangles) {
+    const cc = circumcircle(points[tri.a], points[tri.b], points[tri.c]);
+    if (!cc) continue;
+    const v = cc.center;
+    cells[tri.a].push(v);
+    cells[tri.b].push(v);
+    cells[tri.c].push(v);
+  }
+
+  // Sort each cell's vertices by angle around the site
+  for (const i in cells) {
+    const site = points[i];
+    cells[i].sort((a, b) => Math.atan2(a.y - site.y, a.x - site.x) - Math.atan2(b.y - site.y, b.x - site.x));
+  }
+  return cells;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  if (points.length < 3) {
+    if (points.length > 0) drawPoints();
+    ctx.fillStyle = '#475569';
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('3点以上追加するとグラフが描画されます', W / 2, H / 2);
+    document.getElementById('infoPoints').textContent = points.length;
+    document.getElementById('infoTri').textContent = 0;
+    return;
+  }
+
+  computeDelaunay();
+  const cells = computeVoronoiCells();
+
+  // Voronoi
+  if (document.getElementById('showVoronoi').checked) {
+    const colors = ['#3730a3','#1e40af','#0f766e','#065f46','#7e22ce','#9a3412','#1d4ed8'];
+    Object.keys(cells).forEach((i, ci) => {
+      const verts = cells[i];
+      if (verts.length < 3) return;
+      ctx.beginPath();
+      ctx.moveTo(verts[0].x, verts[0].y);
+      verts.slice(1).forEach(v => ctx.lineTo(v.x, v.y));
+      ctx.closePath();
+      ctx.fillStyle = colors[ci % colors.length] + '66';
+      ctx.fill();
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  // Delaunay
+  if (document.getElementById('showDelaunay').checked) {
+    ctx.strokeStyle = '#f472b6';
+    ctx.lineWidth = 1;
+    for (const tri of triangles) {
+      ctx.beginPath();
+      ctx.moveTo(points[tri.a].x, points[tri.a].y);
+      ctx.lineTo(points[tri.b].x, points[tri.b].y);
+      ctx.lineTo(points[tri.c].x, points[tri.c].y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  // Circumcircles
+  if (document.getElementById('showCircles').checked) {
+    ctx.strokeStyle = 'rgba(250,204,21,0.2)';
+    ctx.lineWidth = 1;
+    for (const tri of triangles) {
+      const cc = circumcircle(points[tri.a], points[tri.b], points[tri.c]);
+      if (!cc) continue;
+      ctx.beginPath();
+      ctx.arc(cc.center.x, cc.center.y, Math.sqrt(cc.r2), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  drawPoints();
+
+  document.getElementById('infoPoints').textContent = points.length;
+  document.getElementById('infoTri').textContent = triangles.length;
+}
+
+function drawPoints() {
+  points.forEach((p, i) => {
+    const isHover = i === hoverIdx;
+    const isDrag = i === dragIdx;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, isHover || isDrag ? 8 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = isDrag ? '#ef4444' : isHover ? '#fbbf24' : '#e2e8f0';
+    ctx.fill();
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+}
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  return { x: (src.clientX - rect.left) * scaleX, y: (src.clientY - rect.top) * scaleY };
+}
+
+function findNearest(pos, threshold = 15) {
+  let best = -1, bestD = threshold * threshold;
+  points.forEach((p, i) => {
+    const d = dist2(pos, p);
+    if (d < bestD) { best = i; bestD = d; }
+  });
+  return best;
+}
+
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  const idx = findNearest(pos);
+  if (idx >= 0) { points.splice(idx, 1); draw(); }
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const pos = getCanvasPos(e);
+  const idx = findNearest(pos);
+  if (idx >= 0) {
+    dragIdx = idx;
+  } else {
+    points.push(pos);
+    draw();
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const pos = getCanvasPos(e);
+  if (dragIdx >= 0) {
+    points[dragIdx] = pos;
+    draw();
+  } else {
+    const prev = hoverIdx;
+    hoverIdx = findNearest(pos);
+    if (hoverIdx !== prev) {
+      draw();
+      document.getElementById('infoNearest').textContent =
+        hoverIdx >= 0 ? `点 #${hoverIdx + 1} (${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})` : '-';
+    }
+  }
+});
+
+canvas.addEventListener('mouseup', () => { dragIdx = -1; });
+canvas.addEventListener('mouseleave', () => { dragIdx = -1; hoverIdx = -1; draw(); });
+
+document.getElementById('addRandomBtn').addEventListener('click', () => {
+  const n = parseInt(document.getElementById('addCount').value) || 10;
+  for (let i = 0; i < n; i++) {
+    points.push({ x: Math.random() * (W - 40) + 20, y: Math.random() * (H - 40) + 20 });
+  }
+  draw();
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  points = [];
+  triangles = [];
+  draw();
+});
+
+['showVoronoi','showDelaunay','showPoints','showCircles'].forEach(id => {
+  document.getElementById(id).addEventListener('change', draw);
+});
+
+// Load saved points
+const saved = localStorage.getItem('voronoi_points');
+if (saved) try { points = JSON.parse(saved); } catch(e) {}
+setInterval(() => { localStorage.setItem('voronoi_points', JSON.stringify(points)); }, 2000);
+
+draw();
+</script>
+</body>
+</html>
